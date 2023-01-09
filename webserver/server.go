@@ -2,18 +2,25 @@ package main
 
 import (
 	"fmt"
-	"io"
-	"io/ioutil"
+	"log"
 	"net/http"
-	"os"
-	"time"
+	"sync"
 )
 
+var mu sync.Mutex
+var count int
+
+//Launch a webserver that "handles" workflows whenever it receives a particular request
 func main() {
+
 	start := time.Now()
 	ch := make(chan string)
-	for _, url := range os.Args[1:] {
-		go fetch(url, ch)
+	max_concurrency := 10
+
+	workflows := make(string[], max_concurrency)
+
+	for _, workflow := range workflows {
+		go workflowHandler(workflow, ch)
 	}
 
 	for range os.Args[1:] {
@@ -21,10 +28,44 @@ func main() {
 	}
 
 	fmt.Printf("%.2fs elapsed\n", time.Since(start).Seconds())
+
+	http.HandleFunc("/", homeHandler)
+	http.HandleFunc("/count", counter)
+	http.HandleFunc("/iwantaworkflow", workflowHandler)
+	log.Fatal(http.ListenAndServe("localhost:8000", nil))
 }
 
-func fetch(url string, ch chan<- string) {
+// Handler echoes the HTTP request
+func homeHandler(w http.ResponseWriter, r *http.Request) {
+	fmt.Fprintf(w, "%s %s %s\n", r.Method, r.URL, r.Proto)
+	
+	for k, v := range r.Header {
+		fmt.Fprintf(w, "Header[%q] = %q\n", k, v)
+	}
+
+	fmt.Fprintf(w, "Host = %q\n", r.Host)
+	fmt.Fprintf(w, "RemoteAddr = %q\n", r.RemoteAddr)
+
+	if err := r.ParseForm(); err != nil {
+		log.Print(err)
+	}
+
+	for k, v := range r.Form {
+		fmt.Fprintf(w, "Form[%q] = %q\n", k, v)
+	}
+}
+
+// counter echoes the number of calls so far
+func counter(w http.ResponseWriter, r *http.Request) {
+	mu.Lock()
+	fmt.Fprintf(w, "Count %d\n", count)
+	mu.Unlock()
+}
+
+
+func workflowHandler(url string, ch chan<- string) {
 	start := time.Now()
+	
 	resp, err := http.Get(url)
 	if err != nil {
 		ch <- fmt.Sprint(err) //Send to channel ch
